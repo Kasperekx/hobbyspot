@@ -1,13 +1,31 @@
 import type {
   AuthCredentials,
   AuthSession,
-  AuthUser,
+  CurrentUser,
   FieldErrors,
-  OnboardingPayload,
+  Interest,
+  OnboardingState,
+  OnboardingUpdate,
 } from "./types";
 
 const BASE_URL =
   process.env.EXPO_PUBLIC_API_URL ?? "http://localhost:4000";
+
+/** Abort requests that hang (e.g. unreachable backend) instead of spinning forever. */
+const REQUEST_TIMEOUT_MS = 15000;
+
+async function request(path: string, init: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(`${BASE_URL}${path}`, {
+      ...init,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 /**
  * Error thrown for any non-success auth response.
@@ -58,7 +76,7 @@ function headers(token?: string): Record<string, string> {
 export async function registerRequest(
   credentials: AuthCredentials,
 ): Promise<AuthSession> {
-  const response = await fetch(`${BASE_URL}/api/users/register`, {
+  const response = await request("/api/users/register", {
     method: "POST",
     headers: headers(),
     body: JSON.stringify({ user: credentials }),
@@ -72,7 +90,7 @@ export async function registerRequest(
 export async function logInRequest(
   credentials: AuthCredentials,
 ): Promise<AuthSession> {
-  const response = await fetch(`${BASE_URL}/api/users/log-in`, {
+  const response = await request("/api/users/log-in", {
     method: "POST",
     headers: headers(),
     body: JSON.stringify({ user: credentials }),
@@ -83,34 +101,45 @@ export async function logInRequest(
   throw buildError(response.status, body);
 }
 
-export async function meRequest(token: string): Promise<AuthUser> {
-  const response = await fetch(`${BASE_URL}/api/users/me`, {
+export async function listInterestsRequest(): Promise<Interest[]> {
+  const response = await request("/api/interests", {
+    method: "GET",
+    headers: headers(),
+  });
+  const body = await parseJson(response);
+
+  if (response.ok) return body.data as Interest[];
+  throw buildError(response.status, body);
+}
+
+export async function meRequest(token: string): Promise<CurrentUser> {
+  const response = await request("/api/users/me", {
     method: "GET",
     headers: headers(token),
   });
   const body = await parseJson(response);
 
-  if (response.ok) return body.data.user as AuthUser;
+  if (response.ok) return body.data as CurrentUser;
   throw buildError(response.status, body);
 }
 
-export async function completeOnboardingRequest(
+export async function updateOnboardingRequest(
   token: string,
-  payload: OnboardingPayload,
-): Promise<AuthUser> {
-  const response = await fetch(`${BASE_URL}/api/users/me/onboarding`, {
+  update: OnboardingUpdate,
+): Promise<OnboardingState> {
+  const response = await request("/api/users/me/onboarding", {
     method: "PATCH",
     headers: headers(token),
-    body: JSON.stringify({ user: payload }),
+    body: JSON.stringify({ onboarding: update }),
   });
   const body = await parseJson(response);
 
-  if (response.ok) return body.data.user as AuthUser;
+  if (response.ok) return body.data.onboarding as OnboardingState;
   throw buildError(response.status, body);
 }
 
 export async function logOutRequest(token: string): Promise<void> {
-  const response = await fetch(`${BASE_URL}/api/users/log-out`, {
+  const response = await request("/api/users/log-out", {
     method: "DELETE",
     headers: headers(token),
   });

@@ -10,7 +10,6 @@ import { StatusBar } from "expo-status-bar";
 import { SymbolView, type SymbolViewProps } from "expo-symbols";
 import { useState } from "react";
 import {
-  ActivityIndicator,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -23,8 +22,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { AuthError } from "@/lib/auth/api";
-import { useAuth } from "@/lib/auth/auth-context";
+import { useOnboardingDraft } from "@/lib/onboarding/onboarding-draft";
 
 const isIOS = Platform.OS === "ios";
 
@@ -79,6 +77,14 @@ function toISODate(date: Date) {
   return `${date.getFullYear()}-${month}-${day}`;
 }
 
+/** Parses a `YYYY-MM-DD` string into a local Date, or null when invalid. */
+function fromISODate(value: string | null | undefined): Date | null {
+  if (!value) return null;
+  const [year, month, day] = value.split("-").map(Number);
+  if (!year || !month || !day) return null;
+  return new Date(year, month - 1, day);
+}
+
 function getAge(date: Date) {
   let age = today.getFullYear() - date.getFullYear();
   const monthDiff = today.getMonth() - date.getMonth();
@@ -117,18 +123,17 @@ function Icon({
 export default function ProfileSetupScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { completeOnboarding } = useAuth();
+  const { profile, setProfile } = useOnboardingDraft();
 
-  const [avatar, setAvatar] = useState<string | null>(null);
-  const [fullName, setFullName] = useState("");
-  const [birthDate, setBirthDate] = useState<Date | null>(null);
+  const [avatar, setAvatar] = useState<string | null>(profile.avatar_url);
+  const [fullName, setFullName] = useState(profile.full_name ?? "");
+  const [birthDate, setBirthDate] = useState<Date | null>(
+    fromISODate(profile.birth_date),
+  );
   const [iosPickerOpen, setIosPickerOpen] = useState(false);
   const [draftDate, setDraftDate] = useState(defaultBirthDate);
-  const [submitting, setSubmitting] = useState(false);
-  const [submitError, setSubmitError] = useState<string | null>(null);
 
-  const canContinue =
-    fullName.trim().length > 1 && birthDate !== null && !submitting;
+  const canContinue = fullName.trim().length > 1 && birthDate !== null;
 
   const pickAvatar = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -171,29 +176,19 @@ export default function ProfileSetupScreen() {
     setIosPickerOpen(false);
   };
 
-  const onContinue = async () => {
+  const onContinue = () => {
     if (!canContinue || !birthDate) return;
 
-    setSubmitting(true);
-    setSubmitError(null);
-
-    try {
-      // On success `onboarding_completed` becomes true and the guard routes to /home.
-      await completeOnboarding({
-        avatar_url: avatar,
-        full_name: fullName.trim(),
-        birth_date: toISODate(birthDate),
-      });
-    } catch (error) {
-      if (error instanceof AuthError && error.fieldErrors?.birth_date) {
-        setSubmitError("Nieprawidłowa data urodzenia.");
-      } else if (error instanceof AuthError) {
-        setSubmitError(error.detail ?? error.message);
-      } else {
-        setSubmitError("Nie udało się zapisać profilu. Spróbuj ponownie.");
-      }
-      setSubmitting(false);
-    }
+    // Store the profile in the onboarding draft; everything is submitted in a
+    // single PATCH on the final ("Aha moment") step.
+    setProfile({
+      // avatar_url stays null until an upload endpoint exists; the local image
+      // URI is not a hostable URL.
+      avatar_url: null,
+      full_name: fullName.trim(),
+      birth_date: toISODate(birthDate),
+    });
+    router.push("/onboarding/location");
   };
 
   return (
@@ -340,10 +335,6 @@ export default function ProfileSetupScreen() {
 
           <View style={styles.spacer} />
 
-          {submitError ? (
-            <Text style={styles.submitError}>{submitError}</Text>
-          ) : null}
-
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Dalej"
@@ -355,18 +346,11 @@ export default function ProfileSetupScreen() {
               pressed && canContinue && styles.pressed,
             ]}
           >
-            {submitting ? (
-              <ActivityIndicator color={colors.ink} />
-            ) : (
-              <Text
-                style={[
-                  styles.ctaText,
-                  !canContinue && styles.ctaTextDisabled,
-                ]}
-              >
-                Dalej
-              </Text>
-            )}
+            <Text
+              style={[styles.ctaText, !canContinue && styles.ctaTextDisabled]}
+            >
+              Dalej
+            </Text>
           </Pressable>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -609,12 +593,6 @@ const styles = StyleSheet.create({
   },
   ctaTextDisabled: {
     color: colors.faint,
-  },
-  submitError: {
-    color: colors.danger,
-    fontSize: 14,
-    marginBottom: 12,
-    textAlign: "center",
   },
   modalBackdrop: {
     backgroundColor: "rgba(4, 24, 32, 0.35)",
